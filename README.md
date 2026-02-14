@@ -5,18 +5,44 @@
 
 A transparent fallback cache for [go-redis](https://github.com/redis/go-redis). When your Redis goes down, KVDecorator automatically routes supported commands to an in-memory cache — **zero code changes required** in your business logic.
 
-![Architecture](kv.png)
-
 ## How It Works
 
 ```
-Normal:    Client  ──▶  go-redis  ──▶  Redis     (+ dual-write to local cache)
-Degraded:  Client  ──▶  go-redis  ──▶  LocalCache (circuit breaker open)
-Recovery:  TCP probe detects Redis is back  ──▶  auto switch to remote
+                          ┌─────────────────────────────────────────────────┐
+                          │              FallbackHook (redis.Hook)         │
+                          │                                                 │
+                          │  ┌──────────────┐       ┌──────────────────┐   │
+  rdb.Get / rdb.Set       │  │  ProcessHook │       │  CircuitBreaker  │   │
+ ─────────────────────▶   │  │              │       │                  │   │
+   (any redis.Cmder)      │  │  breaker.Is  │◀──────│  TCP probe loop  │   │
+                          │  │  Down()?     │       │  (background)    │   │
+                          │  └──┬───────┬───┘       └────────┬─────────┘   │
+                          │     │       │                     │             │
+                          │  breaker    │ breaker           TCP dial        │
+                          │  = open     │ = closed         every Ns        │
+                          │     │       │                     │             │
+                          │     ▼       ▼                     ▼             │
+                          │ ┌───────┐ ┌──────────┐    ┌─────────────┐      │
+                          │ │ Local │ │  Remote  │    │    Redis    │      │
+                          │ │ Cache │ │  Redis   │───▶│   Server    │      │
+                          │ │  (map)│ │          │    │  :6379      │      │
+                          │ └───────┘ └─────┬────┘    └─────────────┘      │
+                          │     ▲           │                              │
+                          │     │  dual-write on success                   │
+                          │     └───────────┘                              │
+                          └─────────────────────────────────────────────────┘
 ```
 
-1. **TCP Circuit Breaker** — A background goroutine probes the Redis address via TCP dial at a configurable interval. After N consecutive failures, the breaker opens. No request-path latency is added.
-2. **FallbackHook** — Implements `redis.Hook`. During normal operation, write commands (`SET`, `DEL`, `MSET`) are dual-written to a local in-memory cache. When the breaker opens, all supported commands are served from the local cache.
+**Normal** — Commands go to Redis. Write operations (`SET`/`DEL`/`MSET`) are dual-written to the local cache as backup.
+
+**Degraded** — TCP probe detects Redis is unreachable. The breaker opens, and all supported commands are served from the local cache. No request ever blocks on a dead connection.
+
+**Recovery** — TCP probe detects Redis is back. The breaker closes, and traffic automatically routes back to Redis.
+
+### Components
+
+1. **CircuitBreaker** — A background goroutine probes the Redis address via `net.DialTimeout("tcp", ...)` at a configurable interval. After N consecutive failures, the breaker opens. No request-path latency is added.
+2. **FallbackHook** — Implements `redis.Hook`. Inspects the breaker state on every command and routes accordingly.
 3. **LocalCache** — A `sync.RWMutex`-protected `map[string]Item` with lazy expiration on read and periodic background cleanup.
 
 ## Installation
