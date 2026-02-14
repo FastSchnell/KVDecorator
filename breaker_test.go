@@ -53,64 +53,6 @@ func TestCircuitBreaker_DeadServer(t *testing.T) {
 	}
 }
 
-func TestCircuitBreaker_LocalOnlyNoAddr(t *testing.T) {
-	cb := NewCircuitBreaker("",
-		WithProbeInterval(50*time.Millisecond),
-		WithLocalOnly(),
-	)
-	cb.Start()
-	defer cb.Stop()
-
-	// Should be down immediately — no waiting for probe failures
-	if !cb.IsDown() {
-		t.Fatal("expected circuit breaker to be down immediately in local-only mode")
-	}
-
-	// Still down after some time (no probe loop running)
-	time.Sleep(200 * time.Millisecond)
-	if !cb.IsDown() {
-		t.Fatal("expected circuit breaker to stay down in local-only mode without addr")
-	}
-}
-
-func TestCircuitBreaker_LocalOnlyWithAddr(t *testing.T) {
-	// Start a listener to simulate Redis coming online
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			conn.Close()
-		}
-	}()
-
-	cb := NewCircuitBreaker(ln.Addr().String(),
-		WithProbeInterval(50*time.Millisecond),
-		WithDialTimeout(100*time.Millisecond),
-		WithThreshold(2),
-		WithLocalOnly(),
-	)
-	cb.Start()
-	defer cb.Stop()
-
-	// Should be down immediately
-	if !cb.IsDown() {
-		t.Fatal("expected circuit breaker to start down in local-only mode")
-	}
-
-	// After probes succeed, breaker should close automatically
-	time.Sleep(300 * time.Millisecond)
-	if cb.IsDown() {
-		t.Fatal("expected circuit breaker to recover after probes succeed")
-	}
-}
-
 func TestCircuitBreaker_Recovery(t *testing.T) {
 	// Start a listener, get its address, then close it to simulate failure
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -15,7 +15,6 @@ type CircuitBreaker struct {
 	dialTimeout      time.Duration
 	threshold        int64 // consecutive failures before tripping
 	consecutiveFails atomic.Int64
-	localOnly        bool // start open and skip probing if addr is empty
 	stop             chan struct{}
 }
 
@@ -37,13 +36,6 @@ func WithThreshold(n int64) BreakerOption {
 	return func(cb *CircuitBreaker) { cb.threshold = n }
 }
 
-// WithLocalOnly makes the breaker start in the open (down) state.
-// If addr is non-empty, the probe loop still runs so that the breaker can
-// close automatically when Redis becomes available.
-func WithLocalOnly() BreakerOption {
-	return func(cb *CircuitBreaker) { cb.localOnly = true }
-}
-
 // NewCircuitBreaker creates a new CircuitBreaker for the given address.
 func NewCircuitBreaker(addr string, opts ...BreakerOption) *CircuitBreaker {
 	cb := &CircuitBreaker{
@@ -60,15 +52,7 @@ func NewCircuitBreaker(addr string, opts ...BreakerOption) *CircuitBreaker {
 }
 
 // Start begins the background TCP probe goroutine.
-// If localOnly is set, the breaker starts in the open state.
-// If additionally the addr is empty, no probe goroutine is started.
 func (cb *CircuitBreaker) Start() {
-	if cb.localOnly {
-		cb.isDown.Store(true)
-	}
-	if cb.addr == "" {
-		return
-	}
 	go cb.probeLoop()
 }
 
