@@ -27,10 +27,10 @@ var _ redis.Hook = (*FallbackHook)(nil)
 type HookOption func(*hookConfig)
 
 type hookConfig struct {
-	probeInterval    time.Duration
-	dialTimeout      time.Duration
-	threshold        int64
-	cleanupInterval  time.Duration
+	probeInterval   time.Duration
+	dialTimeout     time.Duration
+	threshold       int64
+	cleanupInterval time.Duration
 }
 
 // WithHookProbeInterval sets the TCP probe interval. Default: 1s.

@@ -126,6 +126,29 @@ if hook.IsDown() {
 }
 ```
 
+## Dev Without Redis
+
+The same code works whether Redis is running or not — no `if` branches, no mock clients:
+
+```go
+// Exact same code in dev and production
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+hook := kvdecorator.NewFallbackHook("localhost:6379")
+defer hook.Close()
+rdb.AddHook(hook)
+
+rdb.Set(ctx, "session:abc", token, 30*time.Minute)
+rdb.Get(ctx, "session:abc")
+```
+
+| Environment | Redis | What happens |
+|-------------|-------|-------------|
+| Dev laptop  | not installed | `NewFallbackHook` probes on init, breaker trips immediately, all commands run against in-memory cache |
+| CI / test   | not running   | same — tests pass without a Redis dependency |
+| Production  | running       | commands go to Redis, local cache stays warm as backup |
+
+No code changes between environments. Just start (or don't start) Redis.
+
 ## Design Decisions
 
 - **TCP probe, not request-path detection** — The circuit breaker runs independently. It never adds latency to real commands, and it detects recovery even when there is no traffic.

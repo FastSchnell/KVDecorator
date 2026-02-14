@@ -31,7 +31,7 @@ func TestCircuitBreaker_HealthyServer(t *testing.T) {
 	cb.Start()
 	defer cb.Stop()
 
-	time.Sleep(200 * time.Millisecond)
+	// Breaker should be healthy right after Start returns
 	if cb.IsDown() {
 		t.Fatal("expected circuit breaker to be up with healthy server")
 	}
@@ -47,9 +47,9 @@ func TestCircuitBreaker_DeadServer(t *testing.T) {
 	cb.Start()
 	defer cb.Stop()
 
-	time.Sleep(300 * time.Millisecond)
+	// Breaker should already be tripped right after Start returns
 	if !cb.IsDown() {
-		t.Fatal("expected circuit breaker to be down with dead server")
+		t.Fatal("expected circuit breaker to be down immediately after Start with dead server")
 	}
 }
 
