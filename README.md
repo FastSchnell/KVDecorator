@@ -33,7 +33,7 @@ A transparent fallback cache for [go-redis](https://github.com/redis/go-redis). 
                           └─────────────────────────────────────────────────┘
 ```
 
-**Normal** — Commands go to Redis. Write operations (`SET`/`DEL`/`MSET`) are dual-written to the local cache as backup.
+**Normal** — Commands go to Redis. Write operations (`SET`/`DEL`/`MSET`/`HSET`/`HDEL`/`LPUSH`/`RPUSH`/`LPOP`/`RPOP`/`SADD`/`SREM`) are dual-written to the local cache as backup.
 
 **Degraded** — TCP probe detects Redis is unreachable. The breaker opens, and all supported commands are served from the local cache. No request ever blocks on a dead connection.
 
@@ -44,6 +44,57 @@ A transparent fallback cache for [go-redis](https://github.com/redis/go-redis). 
 1. **CircuitBreaker** — A background goroutine probes the Redis address via `net.DialTimeout("tcp", ...)` at a configurable interval. After N consecutive failures, the breaker opens. No request-path latency is added.
 2. **FallbackHook** — Implements `redis.Hook`. Inspects the breaker state on every command and routes accordingly.
 3. **LocalCache** — A `sync.RWMutex`-protected `map[string]Item` with lazy expiration on read and periodic background cleanup.
+
+## Use Cases
+
+### Database + Redis Cache Layer
+
+A common architecture places Redis as a cache in front of the database. When Redis goes down, every request becomes a cache miss and hits the database directly — potentially causing cascading failures or even taking down the DB.
+
+```
+                Without KVDecorator              With KVDecorator
+               ┌──────────────────┐            ┌──────────────────┐
+               │   Application    │            │   Application    │
+               └────────┬─────────┘            └────────┬─────────┘
+                        │                               │
+                        ▼                               ▼
+                ┌───────────────┐              ┌───────────────┐
+                │  Redis (down) │              │  Redis (down) │
+                │      ✗        │              │      ✗        │
+                └───────────────┘              └───────┬───────┘
+                        │                              │ breaker open
+                  all cache misses                     ▼
+                        │                      ┌───────────────┐
+                        ▼                      │  Local Cache   │
+                ┌───────────────┐              │   (in-memory) │
+                │   Database    │              └───────────────┘
+                │  (overloaded) │                 serves cached data,
+                └───────────────┘                 DB stays safe
+```
+
+KVDecorator absorbs the traffic with its in-memory cache, giving you time to restore Redis without risking the database.
+
+### Session Storage
+
+Web applications storing sessions in Redis risk logging out all users when Redis becomes unavailable. With KVDecorator, sessions survive in memory — users stay logged in and experience no interruption.
+
+```go
+// Sessions keep working even if Redis goes down
+rdb.Set(ctx, "session:abc123", sessionJSON, 30*time.Minute)
+rdb.Get(ctx, "session:abc123") // served from local cache during outage
+```
+
+### API Rate Limiting
+
+Rate limiters backed by Redis fail open (no protection) or fail closed (block all traffic) when Redis is unavailable. KVDecorator keeps rate limit counters in local memory, so rate limiting continues to function during an outage.
+
+### Feature Flags & Configuration
+
+Services that read feature flags or configuration from Redis lose access to their config when Redis goes down, potentially causing unexpected behavior. KVDecorator ensures the last-known configuration remains accessible from the local cache.
+
+### Microservice Caching
+
+In microservice architectures, each service often caches upstream responses in Redis to reduce inter-service calls. A Redis outage would trigger a storm of requests to upstream services. KVDecorator acts as a safety net, serving cached responses locally and preventing cascading load.
 
 ## Installation
 
@@ -114,8 +165,23 @@ hook := kvdecorator.NewFallbackHook("localhost:6379",
 | `EXPIRE` | Updates TTL on an existing key |
 | `TTL` | Returns remaining TTL |
 | `PING` | Returns `PONG` |
+| `HGET` | Returns cached hash field value or `redis.Nil` |
+| `HSET` | Stores field-value pairs in local hash |
+| `HDEL` | Removes fields from local hash, returns count |
+| `HGETALL` | Returns all field-value pairs from local hash |
+| `LPUSH` | Prepends to local list, returns new length |
+| `RPUSH` | Appends to local list, returns new length |
+| `LPOP` | Removes and returns first element or `redis.Nil` |
+| `RPOP` | Removes and returns last element or `redis.Nil` |
+| `LRANGE` | Returns elements in range from local list |
+| `LLEN` | Returns length of local list |
+| `SADD` | Adds members to local set, returns count of new |
+| `SREM` | Removes members from local set, returns count |
+| `SMEMBERS` | Returns all members of local set |
+| `SISMEMBER` | Returns whether member is in local set |
+| `SCARD` | Returns cardinality of local set |
 
-Unsupported commands (e.g. `LPUSH`, `ZADD`, `HSET`) return `kvdecorator.ErrDegraded`.
+Unsupported commands (e.g. `ZADD`, `SUBSCRIBE`, `EVAL`) return `kvdecorator.ErrDegraded`.
 
 ## Observability
 
@@ -152,7 +218,7 @@ No code changes between environments. Just start (or don't start) Redis.
 ## Design Decisions
 
 - **TCP probe, not request-path detection** — The circuit breaker runs independently. It never adds latency to real commands, and it detects recovery even when there is no traffic.
-- **Dual-write on success** — During normal operation, `SET`/`DEL`/`MSET` results are mirrored to the local cache. This ensures the local cache is warm when a failover happens.
+- **Dual-write on success** — During normal operation, all write commands (`SET`/`DEL`/`MSET`/`HSET`/`HDEL`/`LPUSH`/`RPUSH`/`LPOP`/`RPOP`/`SADD`/`SREM`) are mirrored to the local cache. This ensures the local cache is warm when a failover happens.
 - **`redis.Hook` integration** — No wrapper client, no custom interface. Just `AddHook()` on any existing `redis.Client`, `redis.ClusterClient`, or `redis.Ring`.
 - **No external dependencies** — Only depends on `go-redis/v9` and the Go standard library.
 
@@ -162,10 +228,10 @@ No code changes between environments. Just start (or don't start) Redis.
 go test -race -v ./...
 ```
 
-25 tests covering:
-- LocalCache: set/get, TTL expiration, delete, exists, mget/mset, expire, flush, concurrent access
+66 tests covering:
+- LocalCache: string ops (set/get, TTL, delete, exists, mget/mset, expire, flush), hash ops (hset/hget, hdel, hgetall), list ops (lpush/lpop, rpush/rpop, lrange, llen), set ops (sadd/smembers, srem, sismember, scard), cross-type ops, concurrent access
 - CircuitBreaker: healthy server, dead server, recovery cycle
-- FallbackHook: all supported commands, backup logic, degraded routing, pipeline handling
+- FallbackHook: all 24 supported commands, backup logic for all write operations, degraded routing, pipeline handling
 
 ## License
 
