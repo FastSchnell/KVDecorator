@@ -51,8 +51,13 @@ func NewCircuitBreaker(addr string, opts ...BreakerOption) *CircuitBreaker {
 	return cb
 }
 
-// Start begins the background TCP probe goroutine.
+// Start runs an initial synchronous probe to determine the current state of
+// the remote service, then launches the background probe goroutine.
+// If Redis is unreachable, the breaker trips before Start returns.
 func (cb *CircuitBreaker) Start() {
+	for range cb.threshold {
+		cb.probe()
+	}
 	go cb.probeLoop()
 }
 
