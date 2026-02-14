@@ -233,6 +233,44 @@ func TestHook_SetWithPX(t *testing.T) {
 	}
 }
 
+func TestHook_LocalOnlyMode(t *testing.T) {
+	hook := NewFallbackHook("",
+		WithHookLocalOnly(),
+		WithHookCleanupInterval(time.Minute),
+	)
+	defer hook.Close()
+
+	// Should be in degraded (local) mode from the start
+	if !hook.IsDown() {
+		t.Fatal("expected hook to be in local-only mode immediately")
+	}
+
+	ctx := context.Background()
+
+	// SET should work
+	setCmd := redis.NewStatusCmd(ctx, "set", "lo_key", "lo_val", "ex", "60")
+	process := hook.ProcessHook(func(ctx context.Context, cmd redis.Cmder) error {
+		return fmt.Errorf("should not reach remote")
+	})
+	err := process(ctx, setCmd)
+	if err != nil {
+		t.Fatalf("SET in local-only mode failed: %v", err)
+	}
+	if setCmd.Val() != "OK" {
+		t.Fatalf("expected OK, got %q", setCmd.Val())
+	}
+
+	// GET should return the value just set
+	getCmd := redis.NewStringCmd(ctx, "get", "lo_key")
+	err = process(ctx, getCmd)
+	if err != nil {
+		t.Fatalf("GET in local-only mode failed: %v", err)
+	}
+	if getCmd.Val() != "lo_val" {
+		t.Fatalf("expected lo_val, got %q", getCmd.Val())
+	}
+}
+
 func TestHook_ProcessHookDegraded(t *testing.T) {
 	h := mockHook()
 	defer h.Close()

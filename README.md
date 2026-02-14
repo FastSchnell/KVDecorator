@@ -100,6 +100,24 @@ hook := kvdecorator.NewFallbackHook("localhost:6379",
 | `WithHookDialTimeout` | 500ms | Timeout for each TCP probe dial |
 | `WithHookThreshold` | 3 | Consecutive probe failures required to open the breaker |
 | `WithHookCleanupInterval` | 10s | Interval for the background goroutine that purges expired keys |
+| `WithHookLocalOnly` | false | Start in local-only mode (breaker open from the start) |
+
+## Local-Only Mode
+
+If Redis is not available at startup — or you simply want an in-memory KV — use `WithHookLocalOnly()`:
+
+```go
+// Pure in-memory, no Redis at all
+hook := kvdecorator.NewFallbackHook("", kvdecorator.WithHookLocalOnly())
+rdb.AddHook(hook)
+// All commands go to LocalCache from the first call.
+
+// Redis not started yet, but will be available later
+hook := kvdecorator.NewFallbackHook("localhost:6379", kvdecorator.WithHookLocalOnly())
+rdb.AddHook(hook)
+// Commands go to LocalCache immediately.
+// Background probe keeps checking — when Redis comes online, traffic switches over automatically.
+```
 
 ## Supported Commands in Degraded Mode
 
@@ -139,10 +157,10 @@ if hook.IsDown() {
 go test -race -v ./...
 ```
 
-25 tests covering:
+28 tests covering:
 - LocalCache: set/get, TTL expiration, delete, exists, mget/mset, expire, flush, concurrent access
-- CircuitBreaker: healthy server, dead server, recovery cycle
-- FallbackHook: all supported commands, backup logic, degraded routing, pipeline handling
+- CircuitBreaker: healthy server, dead server, recovery cycle, local-only mode
+- FallbackHook: all supported commands, backup logic, degraded routing, pipeline handling, local-only mode
 
 ## License
 

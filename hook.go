@@ -27,10 +27,11 @@ var _ redis.Hook = (*FallbackHook)(nil)
 type HookOption func(*hookConfig)
 
 type hookConfig struct {
-	probeInterval    time.Duration
-	dialTimeout      time.Duration
-	threshold        int64
-	cleanupInterval  time.Duration
+	probeInterval   time.Duration
+	dialTimeout     time.Duration
+	threshold       int64
+	cleanupInterval time.Duration
+	localOnly       bool
 }
 
 // WithHookProbeInterval sets the TCP probe interval. Default: 1s.
@@ -53,6 +54,13 @@ func WithHookCleanupInterval(d time.Duration) HookOption {
 	return func(c *hookConfig) { c.cleanupInterval = d }
 }
 
+// WithHookLocalOnly makes the hook start in degraded mode immediately, serving
+// all commands from the local in-memory cache. If addr is non-empty, the probe
+// loop still runs so that the hook can switch to Redis when it becomes available.
+func WithHookLocalOnly() HookOption {
+	return func(c *hookConfig) { c.localOnly = true }
+}
+
 // NewFallbackHook creates a FallbackHook for the given Redis address.
 // The addr should match the Redis server address (e.g. "localhost:6379").
 // Use AddHook on your redis.Client to install it:
@@ -72,11 +80,15 @@ func NewFallbackHook(addr string, opts ...HookOption) *FallbackHook {
 		opt(cfg)
 	}
 
-	breaker := NewCircuitBreaker(addr,
+	breakerOpts := []BreakerOption{
 		WithProbeInterval(cfg.probeInterval),
 		WithDialTimeout(cfg.dialTimeout),
 		WithThreshold(cfg.threshold),
-	)
+	}
+	if cfg.localOnly {
+		breakerOpts = append(breakerOpts, WithLocalOnly())
+	}
+	breaker := NewCircuitBreaker(addr, breakerOpts...)
 	breaker.Start()
 
 	cache := NewLocalCache(cfg.cleanupInterval)
