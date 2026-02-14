@@ -45,6 +45,57 @@ A transparent fallback cache for [go-redis](https://github.com/redis/go-redis). 
 2. **FallbackHook** — Implements `redis.Hook`. Inspects the breaker state on every command and routes accordingly.
 3. **LocalCache** — A `sync.RWMutex`-protected `map[string]Item` with lazy expiration on read and periodic background cleanup.
 
+## Use Cases
+
+### Database + Redis Cache Layer
+
+A common architecture places Redis as a cache in front of the database. When Redis goes down, every request becomes a cache miss and hits the database directly — potentially causing cascading failures or even taking down the DB.
+
+```
+                Without KVDecorator              With KVDecorator
+               ┌──────────────────┐            ┌──────────────────┐
+               │   Application    │            │   Application    │
+               └────────┬─────────┘            └────────┬─────────┘
+                        │                               │
+                        ▼                               ▼
+                ┌───────────────┐              ┌───────────────┐
+                │  Redis (down) │              │  Redis (down) │
+                │      ✗        │              │      ✗        │
+                └───────────────┘              └───────┬───────┘
+                        │                              │ breaker open
+                  all cache misses                     ▼
+                        │                      ┌───────────────┐
+                        ▼                      │  Local Cache   │
+                ┌───────────────┐              │   (in-memory) │
+                │   Database    │              └───────────────┘
+                │  (overloaded) │                 serves cached data,
+                └───────────────┘                 DB stays safe
+```
+
+KVDecorator absorbs the traffic with its in-memory cache, giving you time to restore Redis without risking the database.
+
+### Session Storage
+
+Web applications storing sessions in Redis risk logging out all users when Redis becomes unavailable. With KVDecorator, sessions survive in memory — users stay logged in and experience no interruption.
+
+```go
+// Sessions keep working even if Redis goes down
+rdb.Set(ctx, "session:abc123", sessionJSON, 30*time.Minute)
+rdb.Get(ctx, "session:abc123") // served from local cache during outage
+```
+
+### API Rate Limiting
+
+Rate limiters backed by Redis fail open (no protection) or fail closed (block all traffic) when Redis is unavailable. KVDecorator keeps rate limit counters in local memory, so rate limiting continues to function during an outage.
+
+### Feature Flags & Configuration
+
+Services that read feature flags or configuration from Redis lose access to their config when Redis goes down, potentially causing unexpected behavior. KVDecorator ensures the last-known configuration remains accessible from the local cache.
+
+### Microservice Caching
+
+In microservice architectures, each service often caches upstream responses in Redis to reduce inter-service calls. A Redis outage would trigger a storm of requests to upstream services. KVDecorator acts as a safety net, serving cached responses locally and preventing cascading load.
+
 ## Installation
 
 ```bash
@@ -177,7 +228,7 @@ No code changes between environments. Just start (or don't start) Redis.
 go test -race -v ./...
 ```
 
-57 tests covering:
+66 tests covering:
 - LocalCache: string ops (set/get, TTL, delete, exists, mget/mset, expire, flush), hash ops (hset/hget, hdel, hgetall), list ops (lpush/lpop, rpush/rpop, lrange, llen), set ops (sadd/smembers, srem, sismember, scard), cross-type ops, concurrent access
 - CircuitBreaker: healthy server, dead server, recovery cycle
 - FallbackHook: all 24 supported commands, backup logic for all write operations, degraded routing, pipeline handling
