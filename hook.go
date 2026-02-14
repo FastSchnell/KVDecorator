@@ -168,6 +168,36 @@ func (h *FallbackHook) handleLocally(cmd redis.Cmder) error {
 		return h.handleTTL(cmd, args)
 	case "ping":
 		return h.handlePing(cmd)
+	case "hget":
+		return h.handleHGet(cmd, args)
+	case "hset":
+		return h.handleHSet(cmd, args)
+	case "hdel":
+		return h.handleHDel(cmd, args)
+	case "hgetall":
+		return h.handleHGetAll(cmd, args)
+	case "lpush":
+		return h.handleLPush(cmd, args)
+	case "rpush":
+		return h.handleRPush(cmd, args)
+	case "lpop":
+		return h.handleLPop(cmd, args)
+	case "rpop":
+		return h.handleRPop(cmd, args)
+	case "lrange":
+		return h.handleLRange(cmd, args)
+	case "llen":
+		return h.handleLLen(cmd, args)
+	case "sadd":
+		return h.handleSAdd(cmd, args)
+	case "srem":
+		return h.handleSRem(cmd, args)
+	case "smembers":
+		return h.handleSMembers(cmd, args)
+	case "sismember":
+		return h.handleSIsMember(cmd, args)
+	case "scard":
+		return h.handleSCard(cmd, args)
 	default:
 		cmd.SetErr(ErrDegraded)
 		return ErrDegraded
@@ -310,6 +340,257 @@ func (h *FallbackHook) handlePing(cmd redis.Cmder) error {
 	return nil
 }
 
+// --- Hash handlers ---
+
+func (h *FallbackHook) handleHGet(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	field := fmt.Sprintf("%v", args[2])
+	val, ok := h.cache.HGet(key, field)
+	if !ok {
+		cmd.SetErr(redis.Nil)
+		return redis.Nil
+	}
+	if c, ok := cmd.(*redis.StringCmd); ok {
+		c.SetVal(val)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleHSet(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 4 || len(args)%2 != 0 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	fields := make(map[string]string)
+	for i := 2; i < len(args)-1; i += 2 {
+		f := fmt.Sprintf("%v", args[i])
+		v := fmt.Sprintf("%v", args[i+1])
+		fields[f] = v
+	}
+	count := h.cache.HSet(key, fields)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(count)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleHDel(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	fields := make([]string, 0, len(args)-2)
+	for _, a := range args[2:] {
+		fields = append(fields, fmt.Sprintf("%v", a))
+	}
+	count := h.cache.HDel(key, fields...)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(count)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleHGetAll(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 2 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	m := h.cache.HGetAll(key)
+	if c, ok := cmd.(*redis.MapStringStringCmd); ok {
+		c.SetVal(m)
+	}
+	return nil
+}
+
+// --- List handlers ---
+
+func (h *FallbackHook) handleLPush(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	values := make([]string, 0, len(args)-2)
+	for _, a := range args[2:] {
+		values = append(values, fmt.Sprintf("%v", a))
+	}
+	length := h.cache.LPush(key, values...)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(length)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleRPush(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	values := make([]string, 0, len(args)-2)
+	for _, a := range args[2:] {
+		values = append(values, fmt.Sprintf("%v", a))
+	}
+	length := h.cache.RPush(key, values...)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(length)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleLPop(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 2 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	val, ok := h.cache.LPop(key)
+	if !ok {
+		cmd.SetErr(redis.Nil)
+		return redis.Nil
+	}
+	if c, ok := cmd.(*redis.StringCmd); ok {
+		c.SetVal(val)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleRPop(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 2 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	val, ok := h.cache.RPop(key)
+	if !ok {
+		cmd.SetErr(redis.Nil)
+		return redis.Nil
+	}
+	if c, ok := cmd.(*redis.StringCmd); ok {
+		c.SetVal(val)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleLRange(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 4 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	start, err := toInt64(args[2])
+	if err != nil {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	stop, err := toInt64(args[3])
+	if err != nil {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	vals := h.cache.LRange(key, start, stop)
+	if c, ok := cmd.(*redis.StringSliceCmd); ok {
+		c.SetVal(vals)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleLLen(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 2 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	length := h.cache.LLen(key)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(length)
+	}
+	return nil
+}
+
+// --- Set handlers ---
+
+func (h *FallbackHook) handleSAdd(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	members := make([]string, 0, len(args)-2)
+	for _, a := range args[2:] {
+		members = append(members, fmt.Sprintf("%v", a))
+	}
+	count := h.cache.SAdd(key, members...)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(count)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleSRem(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	members := make([]string, 0, len(args)-2)
+	for _, a := range args[2:] {
+		members = append(members, fmt.Sprintf("%v", a))
+	}
+	count := h.cache.SRem(key, members...)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(count)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleSMembers(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 2 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	members := h.cache.SMembers(key)
+	if c, ok := cmd.(*redis.StringSliceCmd); ok {
+		c.SetVal(members)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleSIsMember(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 3 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	member := fmt.Sprintf("%v", args[2])
+	isMember := h.cache.SIsMember(key, member)
+	if c, ok := cmd.(*redis.BoolCmd); ok {
+		c.SetVal(isMember)
+	}
+	return nil
+}
+
+func (h *FallbackHook) handleSCard(cmd redis.Cmder, args []interface{}) error {
+	if len(args) < 2 {
+		cmd.SetErr(ErrDegraded)
+		return ErrDegraded
+	}
+	key := fmt.Sprintf("%v", args[1])
+	count := h.cache.SCard(key)
+	if c, ok := cmd.(*redis.IntCmd); ok {
+		c.SetVal(count)
+	}
+	return nil
+}
+
 // backupLocally saves the result of a successful remote command into the local cache.
 func (h *FallbackHook) backupLocally(cmd redis.Cmder) {
 	args := cmd.Args()
@@ -337,6 +618,72 @@ func (h *FallbackHook) backupLocally(cmd redis.Cmder) {
 			k := fmt.Sprintf("%v", args[i])
 			v := fmt.Sprintf("%v", args[i+1])
 			h.cache.Set(k, v, 0)
+		}
+	case "hset":
+		if len(args) >= 4 {
+			key := fmt.Sprintf("%v", args[1])
+			fields := make(map[string]string)
+			for i := 2; i < len(args)-1; i += 2 {
+				f := fmt.Sprintf("%v", args[i])
+				v := fmt.Sprintf("%v", args[i+1])
+				fields[f] = v
+			}
+			h.cache.HSet(key, fields)
+		}
+	case "hdel":
+		if len(args) >= 3 {
+			key := fmt.Sprintf("%v", args[1])
+			fields := make([]string, 0, len(args)-2)
+			for _, a := range args[2:] {
+				fields = append(fields, fmt.Sprintf("%v", a))
+			}
+			h.cache.HDel(key, fields...)
+		}
+	case "lpush":
+		if len(args) >= 3 {
+			key := fmt.Sprintf("%v", args[1])
+			values := make([]string, 0, len(args)-2)
+			for _, a := range args[2:] {
+				values = append(values, fmt.Sprintf("%v", a))
+			}
+			h.cache.LPush(key, values...)
+		}
+	case "rpush":
+		if len(args) >= 3 {
+			key := fmt.Sprintf("%v", args[1])
+			values := make([]string, 0, len(args)-2)
+			for _, a := range args[2:] {
+				values = append(values, fmt.Sprintf("%v", a))
+			}
+			h.cache.RPush(key, values...)
+		}
+	case "lpop":
+		if len(args) >= 2 {
+			key := fmt.Sprintf("%v", args[1])
+			h.cache.LPop(key)
+		}
+	case "rpop":
+		if len(args) >= 2 {
+			key := fmt.Sprintf("%v", args[1])
+			h.cache.RPop(key)
+		}
+	case "sadd":
+		if len(args) >= 3 {
+			key := fmt.Sprintf("%v", args[1])
+			members := make([]string, 0, len(args)-2)
+			for _, a := range args[2:] {
+				members = append(members, fmt.Sprintf("%v", a))
+			}
+			h.cache.SAdd(key, members...)
+		}
+	case "srem":
+		if len(args) >= 3 {
+			key := fmt.Sprintf("%v", args[1])
+			members := make([]string, 0, len(args)-2)
+			for _, a := range args[2:] {
+				members = append(members, fmt.Sprintf("%v", a))
+			}
+			h.cache.SRem(key, members...)
 		}
 	}
 }
